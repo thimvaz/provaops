@@ -3,7 +3,7 @@ import pandas as pd
 import docx
 import re
 import random
-from io import StringIO, BytesIO
+from io import StringIO
 
 st.set_page_config(page_title="ProvaOps - Sistema de Provas", layout="wide", page_icon="📝")
 
@@ -13,6 +13,16 @@ st.set_page_config(page_title="ProvaOps - Sistema de Provas", layout="wide", pag
 
 def clean_text(text):
     return text.strip()
+
+def extrair_numero_questao(titulo):
+    """
+    Tenta extrair o número de uma string como 'Questão 5' ou 'Física - Questão 05'
+    Retorna string '5' ou None.
+    """
+    match = re.search(r'(\d+)', titulo)
+    if match:
+        return str(int(match.group(1))) # Converte para int e volta para str para remover zeros à esquerda
+    return None
 
 def extrair_gabarito_docx(docx_file):
     """
@@ -42,7 +52,7 @@ def extrair_gabarito_docx(docx_file):
         # Detecção da Resposta
         match = regex_resp.match(texto)
         if match:
-            num = match.group(1)
+            num = str(int(match.group(1))) # Normaliza '01' para '1'
             letra = match.group(2).upper()
             
             if disciplina_atual not in gabarito_map:
@@ -53,13 +63,9 @@ def extrair_gabarito_docx(docx_file):
     return gabarito_map
 
 def converter_docx_para_latex(docx_file, gabarito_full):
-    """
-    Converte o DOCX da prova em LaTeX, inserindo imagens e gabarito.
-    """
     doc = docx.Document(docx_file)
     latex_output = ""
     
-    # Cabeçalho LaTeX Padrão
     latex_output += r"""
 \documentclass[a4paper,10pt]{exam}
 \usepackage[utf8]{inputenc}
@@ -72,7 +78,6 @@ def converter_docx_para_latex(docx_file, gabarito_full):
 
 \begin{document}
 """
-    
     regex_questao = re.compile(r'^\s*(?:Questão\s+)?(\d+)[\.\)\-\s]+', re.IGNORECASE)
     regex_alternativa = re.compile(r'^\s*([a-eA-E])[\.\)\-\s]+')
     
@@ -84,19 +89,16 @@ def converter_docx_para_latex(docx_file, gabarito_full):
         texto = clean_text(para.text)
         estilo = para.style.name
         
-        # 1. Detecção de Disciplina
         if estilo.startswith('Heading 1') or estilo.startswith('Título 1'):
             if dentro_enumerate:
                 latex_output += "\\end{enumerate}\n\n"
                 dentro_enumerate = False
-            
             disciplina_atual = texto
             latex_output += f"\n% ==========================================\n"
             latex_output += f"\\section*{{DISCIPLINA: {disciplina_atual}}}\n" 
             latex_output += f"% ==========================================\n"
             continue
 
-        # 2. Detecção de Imagem (Namespace 'blip' no XML)
         if 'graphic' in para._element.xml:
             nome_img = f"images/image{contador_imagens}.png"
             latex_output += "\\begin{center}\n"
@@ -109,34 +111,29 @@ def converter_docx_para_latex(docx_file, gabarito_full):
         match_q = regex_questao.match(texto)
         match_alt = regex_alternativa.match(texto)
         
-        # 3. Nova Questão
         if match_q:
             if dentro_enumerate:
                 latex_output += "\\end{enumerate}\n\n"
                 dentro_enumerate = False
             
-            num_q = match_q.group(1)
+            num_q = str(int(match_q.group(1)))
             resto_texto = texto[match_q.end():].strip()
             
-            # Busca gabarito no dicionário carregado
             resp = "?"
             if disciplina_atual in gabarito_full:
                 resp = gabarito_full[disciplina_atual].get(num_q, "?")
             
             latex_output += f"\\subsection*{{Questão {num_q}}}\n"
-            latex_output += f"% Gabarito Original: {resp}\n" # Marcador para o parser ler depois
+            latex_output += f"% Gabarito Original: {resp}\n"
             latex_output += f"{resto_texto}\n\n"
             
-        # 4. Alternativa
         elif match_alt:
             if not dentro_enumerate:
                 latex_output += "\\begin{enumerate}[(a)]\n"
                 dentro_enumerate = True
-            
             resto_texto = texto[match_alt.end():].strip()
             latex_output += f"\\item {resto_texto}\n"
             
-        # 5. Texto Comum
         else:
             if dentro_enumerate: 
                 latex_output += "\\end{enumerate}\n\n"
@@ -155,7 +152,7 @@ class QuestaoObj:
         self.titulo = titulo
         self.corpo = corpo
         self.alternativas = alternativas
-        self.gabarito_orig = gabarito_orig # 'A', 'B', etc.
+        self.gabarito_orig = gabarito_orig
         self.disciplina = disciplina
 
 class DisciplinaObj:
@@ -163,64 +160,115 @@ class DisciplinaObj:
         self.nome = nome
         self.questoes = []
 
-def parse_latex_para_objetos(latex_content):
-    """Lê o LaTeX gerado e cria objetos para embaralhamento"""
-    # Separa preâmbulo
+def parse_latex_para_objetos(latex_content, gabarito_externo=None):
+    """
+    Lê o LaTeX e cria objetos.
+    Se gabarito_externo for fornecido (dict), usa ele quando não achar o comentário interno.
+    """
     split_pre = latex_content.split(r'\begin{document}')
     if len(split_pre) < 2: return None, [], "Erro: Sem begin{document}"
+    
     preambulo = split_pre[0] + r'\begin{document}'
     corpo = split_pre[1].split(r'\end{document}')[0]
     rodape = r'\end{document}'
 
-    # Regex para capturar Seções de Disciplina e Subseções de Questão
-    # Padrão gerado pelo acelerador: \section*{DISCIPLINA: Física} e \subsection*{Questão 1}
-    
-    # Vamos dividir por Tags
-    partes = re.split(r'(\\section\*\{DISCIPLINA: .*?\}|\\subsection\*\{Questão .*?\})', corpo)
+    secoes_raw = re.split(r'(\\(?:sub)?section\*\{.*?\})', corpo)
     
     disciplinas = []
-    disc_atual = DisciplinaObj("Geral")
-    disciplinas.append(disc_atual)
-    
+    disc_atual = None
     questao_atual = None
     
-    for parte in partes:
-        parte = parte.strip()
-        if not parte: continue
+    iterator = iter(secoes_raw)
+    try:
+        next(iterator) 
+    except StopIteration:
+        pass
+
+    while True:
+        try:
+            tag = next(iterator)
+            conteudo = next(iterator)
+        except StopIteration:
+            break
+            
+        titulo_limpo = tag.replace(r'\section*{', '').replace(r'\subsection*{', '').replace('}', '').strip()
         
-        if parte.startswith(r'\section*{DISCIPLINA:'):
-            nome_disc = parte.replace(r'\section*{DISCIPLINA:', '').replace('}', '').strip()
+        # --- LÓGICA DE DETECÇÃO HÍBRIDA ---
+        
+        # 1. Disciplina Explícita
+        if "DISCIPLINA:" in titulo_limpo:
+            nome_disc = titulo_limpo.replace("DISCIPLINA:", "").strip()
             disc_atual = DisciplinaObj(nome_disc)
             disciplinas.append(disc_atual)
-            questao_atual = None # Reseta questão ao mudar matéria
+            questao_atual = None 
+            continue
+
+        # 2. Matéria - Questão X
+        elif " - " in titulo_limpo and "Questão" in titulo_limpo:
+            partes = titulo_limpo.split(" - ")
+            nome_disc = partes[0].strip()
             
-        elif parte.startswith(r'\subsection*{Questão'):
-            titulo_q = parte.replace(r'\subsection*{', '').replace('}', '').strip()
-            questao_atual = QuestaoObj(titulo_q, "", [], "?", disc_atual.nome)
+            if disc_atual is None or disc_atual.nome != nome_disc:
+                disc_atual = DisciplinaObj(nome_disc)
+                disciplinas.append(disc_atual)
+            
+            questao_atual = QuestaoObj(titulo_limpo, "", [], "?", disc_atual.nome)
+            disc_atual.questoes.append(questao_atual)
+
+        # 3. Apenas Questão
+        elif "Questão" in titulo_limpo:
+            if disc_atual is None:
+                disc_atual = DisciplinaObj("Geral")
+                disciplinas.append(disc_atual)
+            
+            questao_atual = QuestaoObj(titulo_limpo, "", [], "?", disc_atual.nome)
             disc_atual.questoes.append(questao_atual)
             
+        # 4. Títulos Avulsos que parecem disciplinas
+        elif any(mat in titulo_limpo for mat in ["História", "Física", "Matemática", "Geografia", "Biologia", "Química", "Português", "Inglês"]):
+             disc_atual = DisciplinaObj(titulo_limpo)
+             disciplinas.append(disc_atual)
+             questao_atual = None
+             continue
         else:
-            # Conteúdo (Enunciado + Alternativas)
             if questao_atual:
-                # Tenta extrair gabarito do comentário "% Gabarito Original: X"
-                match_gab = re.search(r'% Gabarito Original:\s*([A-E\?])', parte)
-                if match_gab:
-                    questao_atual.gabarito_orig = match_gab.group(1)
-                
-                # Extrair alternativas (enumerate)
-                match_enum = re.search(r'\\begin\{enumerate\}.*?\]?(.*)\\end\{enumerate\}', parte, re.DOTALL)
-                if match_enum:
-                    itens_texto = match_enum.group(1)
-                    itens = re.split(r'\\item\s?', itens_texto)
-                    questao_atual.alternativas = [it.strip() for it in itens if it.strip()]
+                questao_atual.corpo += f"\n{tag}\n{conteudo}"
+            continue
+
+        # --- EXTRAÇÃO DE CONTEÚDO ---
+        if questao_atual:
+            # A. Tenta achar gabarito embutido
+            match_gab = re.search(r'% Gabarito Original:\s*([A-E\?])', conteudo)
+            if match_gab:
+                questao_atual.gabarito_orig = match_gab.group(1)
+            
+            # B. Se não achou e tem gabarito externo, tenta cruzar
+            elif gabarito_externo:
+                num_q = extrair_numero_questao(titulo_limpo)
+                if num_q:
+                    # Tenta achar na disciplina atual ou na Geral
+                    resp = "?"
+                    if disc_atual.nome in gabarito_externo:
+                        resp = gabarito_externo[disc_atual.nome].get(num_q, "?")
+                    elif "Geral" in gabarito_externo:
+                         resp = gabarito_externo["Geral"].get(num_q, "?")
                     
-                    # Remove o enumerate do corpo para recolocar depois
-                    texto_limpo = parte.replace(match_enum.group(0), "[[ALTS]]")
-                    questao_atual.corpo = texto_limpo
-                else:
-                    questao_atual.corpo = parte
-    
-    # Filtra disciplinas vazias (caso Geral esteja vazia)
+                    if resp != "?":
+                        questao_atual.gabarito_orig = resp
+
+            # Extração de Alternativas
+            match_enum = re.search(r'\\begin\{enumerate\}.*?\]?(.*)\\end\{enumerate\}', conteudo, re.DOTALL)
+            
+            if match_enum:
+                itens_texto = match_enum.group(1)
+                itens = re.split(r'\\item\s?', itens_texto)
+                questao_atual.alternativas = [it.strip() for it in itens if it.strip()]
+                
+                texto_limpo = conteudo.replace(match_enum.group(0), "[[ALTS]]")
+                questao_atual.corpo = texto_limpo
+            else:
+                questao_atual.corpo = conteudo
+
     disciplinas = [d for d in disciplinas if d.questoes]
     return preambulo, disciplinas, rodape
 
@@ -234,18 +282,14 @@ def gerar_latex_embaralhado(preambulo, disciplinas, rodape, seed):
     map_letra_idx = {'A':0, 'B':1, 'C':2, 'D':3, 'E':4}
 
     for disc in disciplinas:
-        # Título da Disciplina
         novo_latex += f"\n\\section*{{{disc.nome}}}\n"
         
-        # Embaralha questões
         questoes_shuffled = disc.questoes.copy()
         random.shuffle(questoes_shuffled)
         
         for q in questoes_shuffled:
-            # Cria novo título
             novo_latex += f"\\subsection*{{Questão {contador_global}}}\n"
             
-            # Embaralha alternativas
             indices = list(range(len(q.alternativas)))
             random.shuffle(indices)
             
@@ -258,13 +302,11 @@ def gerar_latex_embaralhado(preambulo, disciplinas, rodape, seed):
                 txt = q.alternativas[original_i]
                 bloco_alts += f"\\item {txt}\n"
                 
-                # Rastreio do Gabarito
                 if original_i == idx_correto_original:
                     if novo_i < 5: nova_resp_correta = letras[novo_i].replace('(','').replace(')','').upper()
             
             bloco_alts += "\\end{enumerate}\n"
             
-            # Monta corpo
             if "[[ALTS]]" in q.corpo:
                 texto_final = q.corpo.replace("[[ALTS]]", bloco_alts)
             else:
@@ -272,7 +314,6 @@ def gerar_latex_embaralhado(preambulo, disciplinas, rodape, seed):
             
             novo_latex += texto_final
             
-            # Registra no relatório
             gabarito_final.append({
                 "Disciplina": disc.nome,
                 "Questão Nova": contador_global,
@@ -306,19 +347,16 @@ with tab_acelerador:
         
     if file_prova and file_gabarito:
         if st.button("🚀 Processar e Gerar LaTeX"):
-            # 1. Extrair Gabarito
             try:
                 gabarito_map = extrair_gabarito_docx(file_gabarito)
                 st.toast("Gabarito lido com sucesso!", icon="✅")
                 
-                # 2. Converter Prova
                 latex_gerado = converter_docx_para_latex(file_prova, gabarito_map)
                 
                 st.success("Conversão Concluída!")
                 st.markdown("Copie o código abaixo e vá para a aba **Embaralhador**, ou salve para editar no Overleaf.")
                 st.text_area("Código LaTeX Base", value=latex_gerado, height=400, key="latex_output")
                 
-                # Salva no session state para passar para a outra aba automaticamente
                 st.session_state['latex_cache'] = latex_gerado
                 
             except Exception as e:
@@ -327,19 +365,36 @@ with tab_acelerador:
 # --- ABA 2: EMBARALHADOR ---
 with tab_embaralhador:
     st.header("Gerador de Versões")
+    st.markdown("Se você usou o Acelerador, o código já está abaixo. Se tem um arquivo LaTeX bruto, cole-o e suba o gabarito.")
     
-    latex_input = st.text_area("Cole o LaTeX gerado no Acelerador aqui:", 
-                               value=st.session_state.get('latex_cache', ''), 
-                               height=300)
+    col_input, col_gab_extra = st.columns([2, 1])
+    
+    with col_input:
+        latex_input = st.text_area("Código LaTeX:", 
+                                   value=st.session_state.get('latex_cache', ''), 
+                                   height=300)
+    
+    with col_gab_extra:
+        st.info("Arquivo Bruto? Suba o Gabarito aqui:")
+        file_gabarito_extra = st.file_uploader("Gabarito (.docx) [Opcional]", type=['docx'], key="gab_extra")
     
     if latex_input:
         col_seed, col_act = st.columns([1, 2])
         with col_seed:
-            seed_val = st.number_input("Semente (Seed) Aleatória", value=42)
+            seed_val = st.number_input("Semente (Seed)", value=42)
         
         if st.button("🎲 Gerar Prova Embaralhada"):
-            # Parser
-            pre, disc_objs, rod = parse_latex_para_objetos(latex_input)
+            # Lógica para ler gabarito externo se fornecido
+            mapa_gab_externo = None
+            if file_gabarito_extra:
+                try:
+                    mapa_gab_externo = extrair_gabarito_docx(file_gabarito_extra)
+                    st.toast("Gabarito externo carregado!", icon="✅")
+                except:
+                    st.error("Erro ao ler gabarito externo.")
+
+            # Parser com suporte a gabarito externo
+            pre, disc_objs, rod = parse_latex_para_objetos(latex_input, mapa_gab_externo)
             
             if disc_objs:
                 # Gerador
@@ -351,12 +406,11 @@ with tab_embaralhador:
                 with c1:
                     st.subheader("Arquivo LaTeX (.tex)")
                     st.download_button("📥 Baixar Prova.tex", tex_final, f"prova_seed_{seed_val}.tex")
-                    st.code(tex_final[:1000] + "...", language="latex")
-                
+                    
                 with c2:
                     st.subheader("Gabarito da Versão")
                     df = pd.DataFrame(df_gab)
                     st.dataframe(df, hide_index=True)
                     st.download_button("📥 Baixar Gabarito.csv", df.to_csv(index=False), f"gabarito_seed_{seed_val}.csv")
             else:
-                st.error("Não foi possível ler as disciplinas. Verifique se o LaTeX tem os marcadores \\section*{DISCIPLINA: ...}")
+                st.error("Não foi possível ler as disciplinas. Verifique os marcadores do LaTeX.")
