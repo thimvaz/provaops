@@ -4,11 +4,119 @@ import re
 import random
 import zipfile
 from io import BytesIO
+import docx
 
 st.set_page_config(page_title="ProvaOps - Sistema de Provas", layout="wide", page_icon="📝")
 
 # ==========================================
-# FUNÇÕES DO NÚCLEO (BACKEND)
+# FUNÇÕES DO ACELERADOR (WORD -> LATEX)
+# ==========================================
+
+def converter_docx_para_latex(docx_file):
+    doc = docx.Document(docx_file)
+    latex_output = r"""\documentclass[a4paper,10pt]{exam}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazil]{babel}
+\usepackage{graphicx}
+\usepackage[shortlabels]{enumitem}
+\usepackage{multicol}
+
+\begin{document}
+"""
+    regex_questao = re.compile(r'^\s*(?:Questão\s+)?(\d+)[\.\)\-\s]+', re.IGNORECASE)
+    regex_alternativa = re.compile(r'^\s*([a-eA-E])[\.\)\-\s]+')
+    
+    dentro_enumerate = False
+    contador_imagens = 1
+    
+    for para in doc.paragraphs:
+        texto = para.text.strip()
+        estilo = para.style.name
+        
+        # Detecta Títulos para Disciplinas
+        if estilo.startswith('Heading 1') or estilo.startswith('Título 1') or 'Heading' in estilo:
+            if dentro_enumerate:
+                latex_output += "\\end{enumerate}\n\n"
+                dentro_enumerate = False
+            latex_output += f"\n% ==========================================\n"
+            latex_output += f"\\section*{{DISCIPLINA: {texto}}}\n" 
+            latex_output += f"% ==========================================\n"
+            continue
+
+        # Detecta Imagens
+        if 'graphic' in para._element.xml:
+            # Omitimos a extensão (.png/.jpg) propositalmente. O LaTeX auto-detecta a correta!
+            nome_img = f"images/image{contador_imagens}" 
+            latex_output += "\\begin{center}\n"
+            latex_output += f"    \\includegraphics[width=0.6\\linewidth]{{{nome_img}}}\n"
+            latex_output += "\\end{center}\n"
+            contador_imagens += 1
+
+        if not texto: continue
+            
+        match_q = regex_questao.match(texto)
+        match_alt = regex_alternativa.match(texto)
+        
+        # É o início de uma questão?
+        if match_q:
+            if dentro_enumerate:
+                latex_output += "\\end{enumerate}\n\n"
+                dentro_enumerate = False
+            
+            num_q = str(int(match_q.group(1)))
+            resto_texto = texto[match_q.end():].strip()
+            
+            latex_output += f"\\section*{{Questão {num_q}}}\n"
+            if resto_texto:
+                latex_output += f"{resto_texto}\n\n"
+            
+        # É uma alternativa (a, b, c, d, e)?
+        elif match_alt:
+            if not dentro_enumerate:
+                latex_output += "\\begin{enumerate}[(a)]\n"
+                dentro_enumerate = True
+            resto_texto = texto[match_alt.end():].strip()
+            latex_output += f"\\item {resto_texto}\n"
+            
+        # É texto normal (enunciado ou texto de apoio)
+        else:
+            if dentro_enumerate: 
+                latex_output += "\\end{enumerate}\n\n"
+                dentro_enumerate = False
+            latex_output += f"{texto}\n\n"
+
+    if dentro_enumerate:
+        latex_output += "\\end{enumerate}\n"
+
+    latex_output += "\\end{document}"
+    return latex_output
+
+def processar_acelerador_zip(docx_file_bytes):
+    docx_file_bytes.seek(0)
+    latex_text = converter_docx_para_latex(docx_file_bytes)
+    
+    docx_file_bytes.seek(0)
+    zip_buffer = BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as out_zip:
+        # Escreve o código base gerado
+        out_zip.writestr("base.tex", latex_text)
+        
+        # Lê o docx como um ZIP oculto e caça a pasta media/
+        with zipfile.ZipFile(docx_file_bytes, "r") as in_zip:
+            for item in in_zip.namelist():
+                if item.startswith("word/media/"):
+                    filename = item.split("/")[-1]
+                    image_data = in_zip.read(item)
+                    # Salva dentro da pasta images/ do nosso novo zip
+                    out_zip.writestr(f"images/{filename}", image_data)
+                    
+    zip_buffer.seek(0)
+    return zip_buffer, latex_text
+
+# ==========================================
+# FUNÇÕES DO EMBARALHADOR (LATEX -> PROVAS)
 # ==========================================
 
 class QuestaoObj:
@@ -95,7 +203,6 @@ def parse_latex_para_objetos(latex_content):
                     questao_atual.corpo += f"\n{tag}\n{conteudo}"
                     texto_buffer = ""
 
-    # Extração de alternativas mais robusta contra espaços e formatos
     for disc in disciplinas:
         for item in disc.itens:
             questoes_para_processar = item.questoes if isinstance(item, BlocoObj) else [item]
@@ -112,12 +219,9 @@ def parse_latex_para_objetos(latex_content):
                     
                     for idx, it in enumerate([i for i in itens_raw if i.strip()]):
                         it_str = it.strip()
-                        
-                        # Nova busca robusta por variações do marcador de gabarito
                         match_gabarito = re.search(r'%\s*(CORRETO|CORRETA|CERTA)\b', it_str, re.IGNORECASE)
                         if match_gabarito:
                             idx_correto = idx
-                            # Limpa o comentário da versão gerada
                             it_str = it_str.replace(match_gabarito.group(0), '').strip()
                         
                         alternativas_limpas.append(it_str)
@@ -195,70 +299,98 @@ def gerar_latex_embaralhado(preambulo, disciplinas, rodape, seed, sufixo="B"):
 # INTERFACE (FRONTEND)
 # ==========================================
 
-st.title("🚀 Escola Analítica: ProvaOps - Embaralhador")
+st.title("🚀 Escola Analítica: ProvaOps")
 
-with st.expander("📖 INSTRUÇÕES PARA O EDITOR (Clique para expandir)", expanded=True):
+tab_acelerador, tab_embaralhador = st.tabs(["⚡ 1. Acelerador (Extrair do Word)", "🎲 2. Embaralhador (Gerar Provas B e C)"])
+
+# --- ABA 1: ACELERADOR ---
+with tab_acelerador:
+    st.header("Conversor Inteligente de Word para LaTeX")
     st.markdown("""
-    ### 1. Preparando o arquivo no Overleaf (Prova A)
-    Para que o embaralhador funcione perfeitamente, seu código LaTeX precisa ter 3 marcações:
-    * **Divisão de Disciplinas:** Use o comando `\\section*{DISCIPLINA: Nome da Matéria}` antes da primeira questão de cada matéria.
-    * **Textos de Apoio (Indissociáveis):** Se um texto serve para mais de uma questão, coloque `% INICIO BLOCO` antes do texto e `% FIM BLOCO` após a última questão referente a ele.
-    * **Gabarito:** Coloque `%CORRETO` dentro da alternativa certa (logo após o comando `\\item`).
-    
-    ### 2. O que fazer com o arquivo gerado?
-    1. Cole o código da sua Prova A abaixo e clique em Gerar.
-    2. Baixe o arquivo `.zip` e extraia os arquivos no seu computador.
-    3. Vá no seu projeto do Overleaf e **faça o upload dos arquivos `main_B.tex` e `main_C.tex` para a mesma pasta onde estão suas imagens**.
-    4. Selecione o arquivo B ou C no Overleaf e clique em Recompilar para gerar o PDF da nova versão!
+    **Como usar:**
+    1. Baixe o documento do Google Docs clicando em `Arquivo > Fazer download > Microsoft Word (.docx)`.
+    2. Suba o arquivo abaixo.
+    3. O sistema extrairá **todo o texto base e imagens originais** para você subir no Overleaf!
     """)
-
-st.divider()
-
-latex_input = st.text_area("Cole o Código LaTeX da Prova A Original aqui:", height=300)
-
-col_seed, col_empty = st.columns([1, 3])
-with col_seed:
-    seed_val = st.number_input("Semente Inicial (Seed)", value=42)
-
-if st.button("🎲 Gerar Provas B e C (.zip)", type="primary"):
-    if not latex_input.strip():
-        st.warning("⚠️ Por favor, cole o código LaTeX antes de gerar.")
-    else:
-        pre, disc_objs, rod = parse_latex_para_objetos(latex_input)
-        
-        if disc_objs:
-            # Gera Versão B
-            tex_B, gab_B = gerar_latex_embaralhado(pre, disc_objs, rod, seed_val, "B")
-            df_B = pd.DataFrame(gab_B)
-            
-            # Gera Versão C (usando uma semente diferente)
-            tex_C, gab_C = gerar_latex_embaralhado(pre, disc_objs, rod, seed_val + 10, "C")
-            df_C = pd.DataFrame(gab_C)
-            
-            st.success("✅ Provas geradas com sucesso!")
-            st.divider()
-            
-            # Criação do ZIP
-            zip_buffer = BytesIO()
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                zip_file.writestr("Prova_B/main_B.tex", tex_B)
-                zip_file.writestr("Prova_B/Gabarito_B.csv", df_B.to_csv(index=False))
-                zip_file.writestr("Prova_C/main_C.tex", tex_C)
-                zip_file.writestr("Prova_C/Gabarito_C.csv", df_C.to_csv(index=False))
+    
+    file_docx = st.file_uploader("📂 Faça o upload da Prova em .docx", type=['docx'])
+    
+    if file_docx:
+        if st.button("⚙️ Processar e Extrair Imagens", type="primary"):
+            try:
+                zip_buffer, preview_latex = processar_acelerador_zip(file_docx)
                 
-            zip_buffer.seek(0)
-            
-            c1, c2 = st.columns([1, 2])
-            with c1:
+                st.success("✅ Conversão e Extração concluídas com sucesso!")
+                st.info("💡 **Dica de Ouro:** Extraia o arquivo .zip abaixo e suba tudo para o seu projeto no Overleaf. Antes de usar o **Embaralhador** (na próxima aba), abra o `base.tex` no Overleaf e adicione as tags `%CORRETO` nas alternativas e `% INICIO/FIM BLOCO` nos textos de apoio.")
+                
                 st.download_button(
-                    label="📥 Baixar Pacote Completo (.zip)",
+                    label="📥 Baixar Pacote Base (.zip com imagens)",
+                    data=zip_buffer,
+                    file_name="Prova_Base_LaTeX.zip",
+                    mime="application/zip",
+                    use_container_width=True
+                )
+                
+                with st.expander("👀 Ver Prévia do Código Gerado"):
+                    st.code(preview_latex, language="latex")
+            except Exception as e:
+                st.error(f"Ocorreu um erro ao processar: {e}")
+
+# --- ABA 2: EMBARALHADOR ---
+with tab_embaralhador:
+    st.header("Gerador de Versões (B e C)")
+    
+    with st.expander("📖 INSTRUÇÕES PARA O EDITOR (Clique para expandir)", expanded=True):
+        st.markdown("""
+        ### O que fazer com o arquivo final?
+        1. Certifique-se de que a sua **Prova A** no Overleaf já possui as três marcações essenciais:
+            * `\\section*{DISCIPLINA: Nome}`
+            * `% INICIO BLOCO` e `% FIM BLOCO` nos textos de apoio.
+            * `%CORRETO` dentro da alternativa certa.
+        2. Cole o código completo dessa Prova A abaixo e clique em Gerar.
+        3. Baixe o arquivo `.zip`, extraia, e suba os arquivos `main_B.tex` e `main_C.tex` para a mesma pasta da Prova A no Overleaf.
+        4. Recompile e pronto!
+        """)
+
+    latex_input = st.text_area("Cole o Código LaTeX da Prova A Original aqui:", height=300)
+
+    col_seed, col_empty = st.columns([1, 3])
+    with col_seed:
+        seed_val = st.number_input("Semente Inicial (Seed)", value=42)
+
+    if st.button("🎲 Gerar Provas B e C (.zip)", type="primary"):
+        if not latex_input.strip():
+            st.warning("⚠️ Por favor, cole o código LaTeX antes de gerar.")
+        else:
+            pre, disc_objs, rod = parse_latex_para_objetos(latex_input)
+            
+            if disc_objs:
+                tex_B, gab_B = gerar_latex_embaralhado(pre, disc_objs, rod, seed_val, "B")
+                df_B = pd.DataFrame(gab_B)
+                
+                tex_C, gab_C = gerar_latex_embaralhado(pre, disc_objs, rod, seed_val + 10, "C")
+                df_C = pd.DataFrame(gab_C)
+                
+                st.success("✅ Provas geradas com sucesso!")
+                
+                zip_buffer = BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                    zip_file.writestr("Prova_B/main_B.tex", tex_B)
+                    zip_file.writestr("Prova_B/Gabarito_B.csv", df_B.to_csv(index=False))
+                    zip_file.writestr("Prova_C/main_C.tex", tex_C)
+                    zip_file.writestr("Prova_C/Gabarito_C.csv", df_C.to_csv(index=False))
+                    
+                zip_buffer.seek(0)
+                
+                st.download_button(
+                    label="📥 Baixar Pacote Completo de Embaralhamento (.zip)",
                     data=zip_buffer,
                     file_name=f"Provas_Embaralhadas_Seed{seed_val}.zip",
                     mime="application/zip",
                     use_container_width=True
                 )
-            
-            st.caption("🔍 Pré-visualização do Gabarito B:")
-            st.dataframe(df_B, hide_index=True)
-        else:
-            st.error("❌ Não foi possível ler a estrutura da prova. Verifique se copiou o código inteiro (incluindo \\begin{document}).")
+                
+                st.caption("🔍 Pré-visualização do Gabarito B:")
+                st.dataframe(df_B, hide_index=True)
+            else:
+                st.error("❌ Não foi possível ler a estrutura da prova. Verifique se copiou o código inteiro (incluindo \\begin{document}).")
