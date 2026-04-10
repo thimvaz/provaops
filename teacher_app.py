@@ -67,7 +67,7 @@ def converter_docx_para_latex(docx_file):
             num_q = str(int(match_q.group(1)))
             resto_texto = texto[match_q.end():].strip()
             
-            latex_output += f"\\section*{{Questão {num_q}}}\n"
+            latex_output += f"\\subsection*{{Questão {num_q}}}\n"
             if resto_texto:
                 latex_output += f"{resto_texto}\n\n"
             
@@ -256,7 +256,7 @@ def gerar_latex_embaralhado(preambulo, disciplinas, rodape, seed, sufixo="B"):
                 questoes_do_bloco = [item]
             
             for q in questoes_do_bloco:
-                novo_latex += f"\\section*{{Questão {contador_global}}}\n"
+                novo_latex += f"\\subsection*{{Questão {contador_global}}}\n"
                 
                 indices = list(range(len(q.alternativas)))
                 random.shuffle(indices)
@@ -309,7 +309,7 @@ with tab_acelerador:
     st.markdown("""
     **Como usar:**
     1. Baixe o documento do Google Docs clicando em `Arquivo > Fazer download > Microsoft Word (.docx)`.
-    2. Suba o arquivo abaixo.
+    2. Suba o ficheiro abaixo.
     3. O sistema extrairá **todo o texto base e imagens originais** para você subir no Overleaf!
     """)
     
@@ -321,7 +321,7 @@ with tab_acelerador:
                 zip_buffer, preview_latex = processar_acelerador_zip(file_docx)
                 
                 st.success("✅ Conversão e Extração concluídas com sucesso!")
-                st.info("💡 **Dica de Ouro:** Extraia o arquivo .zip abaixo e suba tudo para o seu projeto no Overleaf. Antes de usar o **Embaralhador** (na próxima aba), abra o `base.tex` no Overleaf e adicione as tags `%CORRETO` nas alternativas e `% INICIO/FIM BLOCO` nos textos de apoio.")
+                st.info("💡 **Dica de Ouro:** Extraia o ficheiro .zip abaixo e suba tudo para o seu projeto no Overleaf. Antes de usar o **Embaralhador** (na próxima aba), abra o `base.tex` no Overleaf e adicione as tags `%CORRETO` nas alternativas e `% INICIO/FIM BLOCO` nos textos de apoio.")
                 
                 st.download_button(
                     label="📥 Baixar Pacote Base (.zip com imagens)",
@@ -342,13 +342,13 @@ with tab_embaralhador:
     
     with st.expander("📖 INSTRUÇÕES PARA O EDITOR (Clique para expandir)", expanded=True):
         st.markdown("""
-        ### O que fazer com o arquivo final?
+        ### O que fazer com o ficheiro final?
         1. Certifique-se de que a sua **Prova A** no Overleaf já possui as três marcações essenciais:
             * `\\section*{DISCIPLINA: Nome}`
             * `% INICIO BLOCO` e `% FIM BLOCO` nos textos de apoio.
             * `%CORRETO` dentro da alternativa certa.
         2. Cole o código completo dessa Prova A abaixo e clique em Gerar.
-        3. Baixe o arquivo `.zip`, extraia, e suba os arquivos `main_B.tex` e `main_C.tex` para a mesma pasta da Prova A no Overleaf.
+        3. Baixe o ficheiro `.zip`, extraia, e suba os ficheiros `main_B.tex` e `main_C.tex` para a mesma pasta da Prova A no Overleaf.
         4. Recompile e pronto!
         """)
 
