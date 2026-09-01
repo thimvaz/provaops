@@ -1,8 +1,4 @@
-Aqui está uma sugestão de `README.md` bem completo e didático. Ele não só explica o que o projeto faz, mas também serve como um manual rápido para você ou para outros professores do Colégio Criarte que forem utilizar o sistema no futuro.
 
-Você pode copiar o texto abaixo e salvar como `README.md` na raiz da pasta do seu projeto.
-
----
 
 # 📝 Escola Analítica: ProvaOps - Embaralhador
 
