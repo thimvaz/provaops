@@ -443,16 +443,16 @@ def gerar_latex_embaralhado(preambulo, disciplinas, rodape, seed, sufixo="B"):
 
 st.title("🚀 Escola Analítica: ProvaOps")
 
-tab_acelerador, tab_embaralhador = st.tabs(["⚡ 1. Acelerador (Extrair do Word)", "🎲 2. Embaralhador (Gerar Provas B e C)"])
+tab_acelerador, tab_embaralhador = st.tabs(["⚡ 1. Acelerador (Extrair do Word)", "🎲 2. Embaralhador (Gerar Provas B, C e D)"])
 
 # --- ABA 1: ACELERADOR ---
 with tab_acelerador:
     st.header("Conversor Inteligente de Word para LaTeX")
     st.markdown("""
     **Como usar:**
-    1. Baixe o documento do Google Docs clicando em `Arquivo > Fazer download > Microsoft Word (.docx)`.
-    2. Suba o ficheiro abaixo.
-    3. O sistema extrairá **todo o texto base e imagens originais** para você subir no Overleaf!
+1. Baixe o documento do Google Docs clicando em `Arquivo > Fazer download > Microsoft Word (.docx)`.
+2. Suba o ficheiro abaixo.
+3. O sistema extrairá **todo o texto base e imagens originais** para você subir no Overleaf!
     """)
 
     file_docx = st.file_uploader("📂 Faça o upload da Prova em .docx", type=['docx'])
@@ -480,18 +480,18 @@ with tab_acelerador:
 
 # --- ABA 2: EMBARALHADOR ---
 with tab_embaralhador:
-    st.header("Gerador de Versões (B e C)")
+    st.header("Gerador de Versões (B, C e D)")
 
     with st.expander("📖 INSTRUÇÕES PARA O EDITOR (Clique para expandir)", expanded=True):
         st.markdown("""
         ### O que fazer com o ficheiro final?
-        1. Certifique-se de que a sua **Prova A** no Overleaf já possui as três marcações essenciais:
-            * `\\section*{DISCIPLINA: Nome}`
-            * `% INICIO BLOCO` e `% FIM BLOCO` nos textos de apoio.
-            * `%CORRETO` dentro da alternativa certa.
-        2. Cole o código completo dessa Prova A abaixo (ou suba o `.tex`) e clique em Gerar.
-        3. Baixe o ficheiro `.zip`, extraia, e suba os ficheiros `main_B.tex` e `main_C.tex` para a mesma pasta da Prova A no Overleaf.
-        4. Recompile e pronto!
+1. Certifique-se de que a sua **Prova A** no Overleaf já possui as três marcações essenciais:
+  - `\\section*{DISCIPLINA: Nome}`
+  - `% INICIO BLOCO` e `% FIM BLOCO` nos textos de apoio.
+  - `%CORRETO` dentro da alternativa certa.
+2. Cole o código completo dessa Prova A abaixo (ou suba o `.tex`) e clique em Gerar.
+3. Baixe o ficheiro `.zip`, extraia, e suba os ficheiros `main_B.tex`, `main_C.tex` e `main_D.tex` para a mesma pasta da Prova A no Overleaf.
+4. Recompile e pronto!
         """)
 
     # OTIMIZAÇÃO: além de colar, permite subir o .tex diretamente,
@@ -505,7 +505,7 @@ with tab_embaralhador:
     with col_seed:
         seed_val = st.number_input("Semente Inicial (Seed)", value=42)
 
-    if st.button("🎲 Gerar Provas B e C (.zip)", type="primary"):
+    if st.button("🎲 Gerar Provas B, C e D (.zip)", type="primary"):
         if not latex_input.strip():
             st.warning("⚠️ Por favor, cole o código LaTeX (ou suba o .tex) antes de gerar.")
         else:
@@ -522,6 +522,9 @@ with tab_embaralhador:
 
                 tex_C, gab_C = gerar_latex_embaralhado(pre, disc_objs, rod, seed_val + 10, "C")
                 df_C = pd.DataFrame(gab_C)
+                
+                tex_D, gab_D = gerar_latex_embaralhado(pre, disc_objs, rod, seed_val + 20, "D")
+                df_D = pd.DataFrame(gab_D)
 
                 st.success("✅ Provas geradas com sucesso!")
 
@@ -529,8 +532,12 @@ with tab_embaralhador:
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                     zip_file.writestr("Prova_B/main_B.tex", tex_B)
                     zip_file.writestr("Prova_B/Gabarito_B.csv", df_B.to_csv(index=False))
+                    
                     zip_file.writestr("Prova_C/main_C.tex", tex_C)
                     zip_file.writestr("Prova_C/Gabarito_C.csv", df_C.to_csv(index=False))
+                    
+                    zip_file.writestr("Prova_D/main_D.tex", tex_D)
+                    zip_file.writestr("Prova_D/Gabarito_D.csv", df_D.to_csv(index=False))
 
                 zip_buffer.seek(0)
 
